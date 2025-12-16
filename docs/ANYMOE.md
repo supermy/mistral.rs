@@ -204,3 +204,28 @@ async fn main() -> Result<()> {
 }
 
 ```
+
+## MOE LFU Cache Support
+
+AnyMoE models automatically benefit from the **MOE LFU Cache** mechanism, which optimizes expert selection and improves inference performance.
+
+### How it works with AnyMoE
+1. **Automatic Expert Tracking**: Records access frequency for each expert during inference
+2. **Smart Caching**: Keeps frequently used experts readily available
+3. **Adaptive Optimization**: Adjusts to your specific AnyMoE configuration
+4. **Seamless Integration**: No additional configuration required
+
+### Benefits for AnyMoE
+- **Faster Inference**: Reduces expert loading overhead
+- **Lower Memory Usage**: Optimizes cache usage based on actual expert access patterns
+- **Improved Scalability**: Better handles models with many experts
+- **Automatic**: Enabled by default, no manual setup needed
+
+### Usage
+The MOE LFU Cache is automatically enabled for all AnyMoE models. Simply run your AnyMoE model as usual:
+
+```bash
+./mistralrs-server -i toml -f toml-selectors/anymoe.toml
+```
+
+This LFU cache implementation works seamlessly with both fine-tuned experts and LoRA adapter experts, providing improved performance for all AnyMoE configurations.

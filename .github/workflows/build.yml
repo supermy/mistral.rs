@@ -1,0 +1,153 @@
+on:
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+name: Build and Release
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }} ${{ matrix.features }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macOS-latest]
+        rust: [stable]
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-pc-windows-msvc
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+        features: ["cuda flash-attn", "flash-attn"]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: mistralrs-server-linux-x86_64
+            asset_name: mistralrs-server-linux-x86_64-${{ github.ref_name }}
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: mistralrs-server-windows-x86_64.exe
+            asset_name: mistralrs-server-windows-x86_64-${{ github.ref_name }}.exe
+          - os: macOS-latest
+            target: x86_64-apple-darwin
+            artifact_name: mistralrs-server-macos-x86_64
+            asset_name: mistralrs-server-macos-x86_64-${{ github.ref_name }}
+          - os: macOS-latest
+            target: aarch64-apple-darwin
+            artifact_name: mistralrs-server-macos-aarch64
+            asset_name: mistralrs-server-macos-aarch64-${{ github.ref_name }}
+        exclude:
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: aarch64-apple-darwin
+          - os: macOS-latest
+            target: x86_64-pc-windows-msvc
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          target: ${{ matrix.target }}
+          override: true
+      
+      - name: Install CUDA Toolkit (Linux)
+        if: matrix.os == 'ubuntu-latest' && contains(matrix.features, 'cuda')
+        run: |
+          wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+          sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+          sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
+          sudo add-apt-repository "deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
+          sudo apt-get update
+          sudo apt-get install -y cuda-toolkit-12-1
+      
+      - name: Build with Cargo
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --target ${{ matrix.target }} --features "${{ matrix.features }}" -p mistralrs-server
+          use-cross: ${{ matrix.os == 'ubuntu-latest' }}
+      
+      - name: Copy artifact (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/mistralrs-server ${{ matrix.artifact_name }}
+      
+      - name: Copy artifact (Windows)
+        if: matrix.os == 'windows-latest'
+        run: |
+          Copy-Item -Path target/${{ matrix.target }}/release/mistralrs-server.exe -Destination ${{ matrix.artifact_name }}
+      
+      - name: Copy artifact (macOS)
+        if: matrix.os == 'macOS-latest'
+        run: |
+          cp target/${{ matrix.target }}/release/mistralrs-server ${{ matrix.artifact_name }}
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}-${{ matrix.features }}
+          path: ${{ matrix.artifact_name }}
+          retention-days: 7
+  
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Release ${{ github.ref_name }}
+          draft: true
+          prerelease: false
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: List artifacts
+        run: |
+          ls -la artifacts/
+      
+      - name: Compress and upload all artifacts
+        run: |
+          for dir in artifacts/*; do
+            if [ -d "$dir" ]; then
+              cd "$dir"
+              for file in *; do
+                if [ -f "$file" ]; then
+                  zip "$file.zip" "$file"
+                  echo "Uploading $file.zip to release..."
+                  curl -X POST \
+                    -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                    -H "Content-Type: application/zip" \
+                    --data-binary @"$file.zip" \
+                    "${{ steps.create_release.outputs.upload_url }}?name=$(basename "$file").zip"
+                fi
+              done
+              cd - > /dev/null
+            fi
+          done

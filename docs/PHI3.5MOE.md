@@ -14,6 +14,44 @@ The Phi 3.5 MoE model is a 16x3.8B parameter decoder-only text-to-text mixture o
     - If multiple experts are selected for the token, then this becomes a weighted sum
     - The design is flexible: 2 or 1 experts can be selected, enabling dense or sparse gating
 
+## MOE LFU Cache
+
+Mistral.rs implements a **Least Frequently Used (LFU)** cache mechanism for MOE models to optimize expert selection and improve inference performance.
+
+### How it works
+1. **Expert Access Tracking**: Records how frequently each expert is accessed during inference
+2. **Last Access Time**: Tracks when each expert was last used
+3. **Smart Caching**: Optimizes expert loading and usage based on access patterns
+4. **Adaptive Optimization**: Adjusts caching strategy based on actual usage data
+
+### Benefits
+- **Faster Inference**: Reduces expert loading overhead by keeping frequently used experts readily available
+- **Lower Memory Usage**: Optimizes expert caching to use memory efficiently
+- **Improved Scalability**: Better handles larger MOE models with more experts
+- **Automatic**: Enabled by default for all MOE models, no manual configuration required
+
+### Supported MOE Models
+- Phi 3.5 MoE
+- Qwen 3 MoE
+- DeepSeek V3 MoE
+- Mixtral 8x7B
+- Any other MOE models with `moe_num_experts` configuration
+
+### Usage
+The MOE LFU Cache is **enabled by default** for all MOE models. Simply run your MOE model as usual, and the LFU cache will automatically optimize expert selection:
+
+```bash
+./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct
+```
+
+### Technical Details
+- **Expert Frequency Tracking**: Maintains a counter for each expert's access frequency
+- **Time-based Eviction**: Considers both frequency and recency of access
+- **Adaptive Scaling**: Adjusts to different model sizes and expert counts
+- **Low Overhead**: Minimal performance impact from tracking itself
+
+This LFU cache implementation is designed to work seamlessly with all MOE models, providing improved performance without any additional configuration required from users.
+
 ```
 ./mistralrs-server --isq 4 -i plain -m microsoft/Phi-3.5-MoE-instruct
 ```

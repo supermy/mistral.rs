@@ -16,6 +16,8 @@ use std::sync::Arc;
 use crate::cuda::moe;
 use crate::layers::Activation;
 use crate::moe::shard;
+use crate::moe::usage_tracker::ExpertUsageTracker;
+use crate::moe::cache_manager::ExpertCacheManager;
 
 /// Configuration for MoEExperts
 pub struct MoEExpertsConfig {
@@ -90,6 +92,10 @@ pub struct MoEExperts {
     num_experts_per_tok: usize,
     all_reduce: SumAllReduce,
     world_size: usize,
+    /// Tracks expert usage frequency for LFU caching
+    usage_tracker: Arc<ExpertUsageTracker>,
+    /// Cache manager for dynamic expert loading and LFU replacement
+    cache_manager: Option<Arc<ExpertCacheManager>>,
 }
 
 enum MoEExpertsBackendImpl {
@@ -176,7 +182,19 @@ impl MoEExperts {
             num_experts_per_tok: cfg.num_experts_per_tok,
             all_reduce: SumAllReduce::new(comm),
             world_size: comm.world_size(),
+            usage_tracker: Arc::new(ExpertUsageTracker::default()),
+            cache_manager: None, // Cache manager can be added later via set_cache_manager
         })
+    }
+
+    /// Set the cache manager for this MoEExperts instance
+    pub fn set_cache_manager(&mut self, cache_manager: Arc<ExpertCacheManager>) {
+        self.cache_manager = Some(cache_manager);
+    }
+
+    /// Get the usage tracker for this MoEExperts instance
+    pub fn usage_tracker(&self) -> Arc<ExpertUsageTracker> {
+        self.usage_tracker.clone()
     }
 
     /// Load fused weights in standard per-expert format
@@ -347,6 +365,15 @@ impl MoEExperts {
         is_prefill: bool,
     ) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
+
+        // Record expert accesses for LFU
+        // Use the same approach as forward_slow method to get expert indices
+        let topk_ids_u32 = topk_ids.to_vec2::<u32>()?;
+        for ids in topk_ids_u32.iter() {
+            for &id in ids {
+                self.usage_tracker.record_access(id as usize);
+            }
+        }
 
         let mut ys = match &self.backend {
             MoEExpertsBackendImpl::Fused(weights) => {

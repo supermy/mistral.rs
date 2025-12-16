@@ -400,6 +400,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
    - [GPTQ](docs/QUANTS.md), [AWQ](scripts/convert_awq_marlin.py), [AFQ](docs/QUANTS.md), [HQQ](docs/QUANTS.md), [FP8](docs/QUANTS.md), [BNB](https://github.com/TimDettmers/bitsandbytes) (int8/fp4/nf4)
    - ⭐ Auto-select the fastest quant method
    - [KV cache quantization](docs/PAGED_ATTENTION.md#kv-cache-quantization)
+   - ⭐ [MOE LFU Cache](docs/PHI3.5MOE.md#moe-lfu-cache): Optimized expert selection caching for MOE models
 
 4. **Flexibility**
    - [LoRA](docs/ADAPTER_MODELS.md) & [X-LoRA](docs/ADAPTER_MODELS.md) adapters with weight merging
