@@ -48,6 +48,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - Gemma
 - Llama
 - Mistral
+- Minimax M2
 </details>
 
 <details>
@@ -683,6 +684,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `qwen3moe`
 - `smollm3`
 - `granitemoehybrid`
+- `minimax_m2`
 
 </details>
 
@@ -735,6 +737,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - starcoder2
 - qwen2
 - qwen3
+- minimax_m2
 
 **With adapters:**
 - llama

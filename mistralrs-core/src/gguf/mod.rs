@@ -29,6 +29,7 @@ pub enum GGUFArchitecture {
     Qwen2,
     Qwen3,
     Qwen3MoE,
+    MinimaxM2,
 }
 
 // Wraps from_str() for some convenience:
