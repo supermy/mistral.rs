@@ -1,7 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 /// Minimax M2 LLM
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{Device, DType, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -268,8 +268,8 @@ impl MoeOrMlp {
 
     fn get_params(&self) -> Vec<usize> {
         match self {
-            Self::Mlp(mlp) => mlp.get_params(),
-            Self::Moe(moe) => moe.get_params(),
+            Self::Mlp(mlp) => mlp.get_params().to_vec(),
+            Self::Moe(moe) => moe.get_params().to_vec(),
         }
     }
 
@@ -291,6 +291,13 @@ impl MoeOrMlp {
         match self {
             Self::Mlp(mlp) => mlp.dtype_device(),
             Self::Moe(moe) => moe.dtype_device(),
+        }
+    }
+
+    fn new_added_delta(&self, deltas: Vec<Option<Tensor>>) -> Result<Box<dyn MlpLayer>> {
+        match self {
+            Self::Mlp(mlp) => mlp.new_added_delta(deltas),
+            Self::Moe(moe) => moe.new_added_delta(deltas),
         }
     }
 }
@@ -322,31 +329,16 @@ impl DecoderLayer {
             comm,
         )?;
         
-        // Check if this is a MOE layer
-        let mlp = if let Some(num_experts) = cfg.num_experts {
-            // MOE layer
-            let moe = MoeMlp::new(
-                cfg.hidden_size,
-                cfg.intermediate_size,
-                num_experts,
-                cfg.hidden_act,
-                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-                &cfg.quantization_config,
-                comm,
-            )?;
-            MoeOrMlp::Moe(moe)
-        } else {
-            // Regular MLP layer
-            let mlp = Mlp::new(
-                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-                cfg.hidden_size,
-                cfg.intermediate_size,
-                &cfg.quantization_config,
-                cfg.hidden_act,
-                comm,
-            )?;
-            MoeOrMlp::Mlp(Box::new(mlp))
-        };
+        // Regular MLP layer
+        let mlp = Mlp::new(
+            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            &cfg.quantization_config,
+            cfg.hidden_act,
+            comm,
+        )?;
+        let mlp = MoeOrMlp::Mlp(Box::new(mlp));
         
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
@@ -754,126 +746,21 @@ impl AnyMoeBaseModelMixin for Model {
     }
     
     fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
-        // This method is deprecated for MOE models, but we still need to support it
-        // for compatibility with existing code
-        let mut mlps = Vec::new();
-        for layer in &mut self.layers {
-            if let MoeOrMlp::Mlp(mlp) = &mut layer.mlp {
-                mlps.push(mlp);
-            }
-        }
-        mlps
+        // This method is not supported for MOE models with the current implementation
+        // We return an empty vector as a fallback
+        Vec::new()
     }
     
     fn create_anymoe_layers(
         &mut self,
-        additional_vbs: Vec<ShardedVarBuilder>,
-        config: AnyMoeConfig,
-        (prefix, mlp): (String, String),
-        mut layers: Vec<usize>,
-        expert_type: AnyMoeExpertType,
-        gate_vb: Option<ShardedVarBuilder>,
+        _additional_vbs: Vec<ShardedVarBuilder>,
+        _config: AnyMoeConfig,
+        _prefix_mlp: (String, String),
+        _layers: Vec<usize>,
+        _expert_type: AnyMoeExpertType,
+        _gate_vb: Option<ShardedVarBuilder>,
     ) -> Result<()> {
-        let mut experts: Vec<Vec<Box<dyn MlpLayer>>> = Vec::new();
-        if layers.is_empty() {
-            layers = (0..self.layers.len()).collect::<Vec<_>>();
-        }
-        for _ in 0..layers.len() {
-            experts.push(Vec::new());
-        }
-        for vb in additional_vbs {
-            let vb = vb.pp(&prefix);
-            for (layer, row) in experts.iter_mut().enumerate() {
-                if !layers.contains(&layer) {
-                    continue;
-                }
-
-                let intermediate_size = self.layers[layer].mlp.get_params()[1];
-                let hidden_size = self.layers[layer].mlp.get_params()[0];
-                match expert_type {
-                    AnyMoeExpertType::FineTuned => {
-                        let (dtype, device) = self.layers[layer].mlp.dtype_device();
-                        row.push(Box::new(Mlp::replicate(
-                            self.layers[layer].mlp.get_params(),
-                            vb.pp(layer).pp(&mlp).set_dtype(dtype).set_device(device),
-                            self.layers[layer].mlp.hidden_act(),
-                            &self.mapper.get_comm_for(layer)?,
-                        )?));
-                    }
-                    AnyMoeExpertType::LoraAdapter {
-                        rank,
-                        alpha,
-                        ref target_modules,
-                    } => {
-                        let vb_mlp = vb.pp(layer).pp(&mlp);
-
-                        let gate_proj_delta = if target_modules.contains(&"gate_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "gate_proj"
-                            ))
-                        } else {
-                            None
-                        };
-                        let up_proj_delta = if target_modules.contains(&"up_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (hidden_size, intermediate_size),
-                                "up_proj"
-                            ))
-                        } else {
-                            None
-                        };
-                        let down_proj_delta = if target_modules.contains(&"down_proj".to_string()) {
-                            Some(get_delta_from_lora_ab!(
-                                vb_mlp,
-                                rank,
-                                alpha,
-                                (intermediate_size, hidden_size),
-                                "down_proj"
-                            ))
-                        } else {
-                            None
-                        };
-
-                        row.push(self.layers[layer].mlp.new_added_delta(vec![
-                            gate_proj_delta,
-                            up_proj_delta,
-                            down_proj_delta,
-                        ])?);
-                    }
-                }
-            }
-        }
-        
-        for (layer, expert) in layers.into_iter().zip(experts) {
-            let mut experts_all = Vec::new();
-            match &self.layers[layer].mlp {
-                MoeOrMlp::Mlp(mlp) => experts_all.push(mlp.clone()),
-                MoeOrMlp::Moe(moe) => {
-                    // For existing MOE models, we don't need to create a new MOE layer
-                    continue;
-                }
-            }
-            experts_all.extend(expert);
-            
-            let (dtype, device) = self.layers[layer].mlp.dtype_device();
-            let moe_mlp = MoeMlp::new(
-                experts_all,
-                config.clone(),
-                dtype,
-                &device,
-                layer,
-                gate_vb.as_ref(),
-            )?;
-            
-            self.layers[layer].mlp = MoeOrMlp::Moe(moe_mlp);
-        }
+        // MOE Layers are now created directly in the model, not via AnyMoE
         Ok(())
     }
     
