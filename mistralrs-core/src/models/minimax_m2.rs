@@ -45,6 +45,13 @@ pub struct Config {
     pub(crate) quantization_config: Option<QuantizedConfig>,
     #[serde(default = "tie_word_embeddings")]
     pub(crate) tie_word_embeddings: bool,
+    // MOE specific fields
+    pub(crate) moe_intermediate_size: Option<usize>,
+    pub(crate) num_experts: Option<usize>,
+    pub(crate) mlp_only_layers: Option<Vec<usize>>,
+    pub(crate) decoder_sparse_step: Option<usize>,
+    pub(crate) norm_topk_prob: Option<bool>,
+    pub(crate) num_experts_per_tok: Option<usize>,
 }
 
 impl Config {
@@ -246,9 +253,51 @@ impl Attention {
     }
 }
 
+enum MoeOrMlp {
+    Moe(MoeMlp),
+    Mlp(Box<dyn MlpLayer>),
+}
+
+impl MoeOrMlp {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        match self {
+            Self::Mlp(mlp) => mlp.forward(xs),
+            Self::Moe(moe) => moe.forward(xs),
+        }
+    }
+
+    fn get_params(&self) -> Vec<usize> {
+        match self {
+            Self::Mlp(mlp) => mlp.get_params(),
+            Self::Moe(moe) => moe.get_params(),
+        }
+    }
+
+    fn get_isq_layers(&mut self) -> Vec<&mut Arc<dyn QuantMethod>> {
+        match self {
+            Self::Mlp(mlp) => mlp.get_isq_layers(),
+            Self::Moe(moe) => moe.get_isq_layers(),
+        }
+    }
+
+    fn hidden_act(&self) -> Activation {
+        match self {
+            Self::Mlp(mlp) => mlp.hidden_act(),
+            Self::Moe(moe) => moe.hidden_act(),
+        }
+    }
+
+    fn dtype_device(&self) -> (DType, Device) {
+        match self {
+            Self::Mlp(mlp) => mlp.dtype_device(),
+            Self::Moe(moe) => moe.dtype_device(),
+        }
+    }
+}
+
 struct DecoderLayer {
     self_attn: Attention,
-    mlp: Box<dyn MlpLayer>,
+    mlp: MoeOrMlp,
     input_layernorm: RmsNorm,
     post_attention_layernorm: RmsNorm,
 }
@@ -272,14 +321,33 @@ impl DecoderLayer {
             paged_attn,
             comm,
         )?;
-        let mlp = Mlp::new(
-            mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
-            cfg.hidden_size,
-            cfg.intermediate_size,
-            &cfg.quantization_config,
-            cfg.hidden_act,
-            comm,
-        )?;
+        
+        // Check if this is a MOE layer
+        let mlp = if let Some(num_experts) = cfg.num_experts {
+            // MOE layer
+            let moe = MoeMlp::new(
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                num_experts,
+                cfg.hidden_act,
+                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                &cfg.quantization_config,
+                comm,
+            )?;
+            MoeOrMlp::Moe(moe)
+        } else {
+            // Regular MLP layer
+            let mlp = Mlp::new(
+                mapper.set_device(layer_idx, vb.pp("mlp"), loading_isq),
+                cfg.hidden_size,
+                cfg.intermediate_size,
+                &cfg.quantization_config,
+                cfg.hidden_act,
+                comm,
+            )?;
+            MoeOrMlp::Mlp(Box::new(mlp))
+        };
+        
         let input_layernorm = RmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
@@ -292,7 +360,7 @@ impl DecoderLayer {
         )?;
         Ok(Self {
             self_attn,
-            mlp: Box::new(mlp),
+            mlp,
             input_layernorm,
             post_attention_layernorm,
         })
@@ -677,17 +745,26 @@ impl AnyMoeBaseModelMixin for Model {
     fn get_mlps(&self) -> Vec<&dyn MlpLayer> {
         let mut mlps = Vec::new();
         for layer in &self.layers {
-            mlps.push(&*layer.mlp);
+            match &layer.mlp {
+                MoeOrMlp::Mlp(mlp) => mlps.push(&**mlp),
+                MoeOrMlp::Moe(moe) => mlps.push(moe),
+            }
         }
         mlps
     }
+    
     fn get_mlps_mut(&mut self) -> Vec<&mut Box<dyn MlpLayer>> {
+        // This method is deprecated for MOE models, but we still need to support it
+        // for compatibility with existing code
         let mut mlps = Vec::new();
         for layer in &mut self.layers {
-            mlps.push(&mut layer.mlp);
+            if let MoeOrMlp::Mlp(mlp) = &mut layer.mlp {
+                mlps.push(mlp);
+            }
         }
         mlps
     }
+    
     fn create_anymoe_layers(
         &mut self,
         additional_vbs: Vec<ShardedVarBuilder>,
@@ -773,21 +850,33 @@ impl AnyMoeBaseModelMixin for Model {
                 }
             }
         }
+        
         for (layer, expert) in layers.into_iter().zip(experts) {
-            let mut experts_all = vec![self.layers[layer].mlp.clone()];
+            let mut experts_all = Vec::new();
+            match &self.layers[layer].mlp {
+                MoeOrMlp::Mlp(mlp) => experts_all.push(mlp.clone()),
+                MoeOrMlp::Moe(moe) => {
+                    // For existing MOE models, we don't need to create a new MOE layer
+                    continue;
+                }
+            }
             experts_all.extend(expert);
+            
             let (dtype, device) = self.layers[layer].mlp.dtype_device();
-            self.layers[layer].mlp = Box::new(MoeMlp::new(
+            let moe_mlp = MoeMlp::new(
                 experts_all,
                 config.clone(),
                 dtype,
                 &device,
                 layer,
                 gate_vb.as_ref(),
-            )?);
+            )?;
+            
+            self.layers[layer].mlp = MoeOrMlp::Moe(moe_mlp);
         }
         Ok(())
     }
+    
     fn amoe_supported(&self) -> bool {
         true
     }
