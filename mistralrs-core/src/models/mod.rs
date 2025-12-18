@@ -24,4 +24,4 @@ pub(crate) mod qwen3;
 pub(crate) mod qwen3_moe;
 pub(crate) mod smollm3;
 pub(crate) mod starcoder2;
-pub(crate) mod mimov2_flash;
+// pub(crate) mod mimov2_flash;

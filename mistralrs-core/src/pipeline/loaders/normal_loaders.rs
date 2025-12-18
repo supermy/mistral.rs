@@ -317,7 +317,7 @@ impl AutoNormalLoader {
             NormalLoaderType::SmolLm3 => Ok(Box::new(SmolLm3Loader)),
             NormalLoaderType::GraniteMoeHybrid => Ok(Box::new(GraniteMoeHybridLoader)),
             NormalLoaderType::MinimaxM2 => Ok(Box::new(MinimaxM2Loader)),
-            NormalLoaderType::MiMoV2Flash => Ok(Box::new(MiMoV2FlashLoader)),
+            // NormalLoaderType::MiMoV2Flash => Ok(Box::new(MiMoV2FlashLoader)),
         }
     }
 }
@@ -4192,200 +4192,200 @@ impl DeviceMappedModelLoader for GraniteMoeHybridLoader {
 /// [`NormalLoader`] for a MiMo-V2-Flash model.
 ///
 /// [`NormalLoader`]: https://ericlbuehler.github.io/mistral.rs/mistralrs/struct.NormalLoader.html
-pub struct MiMoV2FlashLoader;
-
-impl NormalModelLoader for MiMoV2FlashLoader {
-    fn load(
-        &self,
-        config: &str,
-        vb: ShardedVarBuilder,
-        normal_loading_metadata: NormalLoadingMetadata,
-        attention_mechanism: AttentionImplementation,
-    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
-
-        Ok(Box::new(models::mimov2_flash::Model::new(
-            &cfg,
-            vb,
-            self.is_gptx(config)?,
-            normal_loading_metadata,
-            attention_mechanism,
-        )?))
-    }
-    fn load_xlora(
-        &self,
-        config: &str,
-        vb: ShardedVarBuilder,
-        lora_config: &[((String, String), LoraConfig)],
-        xlora_config: Option<XLoraConfig>,
-        xlora_ordering: Ordering,
-        normal_loading_metadata: NormalLoadingMetadata,
-        preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
-    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
-        // MiMo-V2-Flash doesn't support XLora yet
-        anyhow::bail!("XLora not supported for MiMo-V2-Flash")
-    }
-    fn is_gptx(&self, _: &str) -> Result<bool> {
-        Ok(true)
-    }
-    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
-        let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
-
-        Ok(Box::new(cfg))
-    }
-}
-
-impl IsqModelLoader for MiMoV2FlashLoader {
-    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
-        Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
-            // Attention
-            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
-            // MOE
-            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(w1|w2|w3)\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-        ])
-    }
-    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
-        self.isq_layer_regexes(config)
-    }
-
-    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
-        Ok(vec![
-            Regex::new(r"lm_head\.(weight|bias)$")?,
-            // MOE layers only for MoQE
-            Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(w1|w2|w3)\.(weight|bias)$")?,
-            Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
-        ])
-    }
-    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
-        self.isq_layer_regexes_moqe(config)
-    }
-}
-
-impl DeviceMappedModelLoader for MiMoV2FlashLoader {
-    fn mapped_max_act_size_elems(
-        &self,
-        config: &str,
-        params: &AutoDeviceMapParams,
-    ) -> Result<usize> {
-        let AutoDeviceMapParams::Text {
-            max_seq_len,
-            max_batch_size,
-        } = params
-        else {
-            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
-        };
-
-        let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
-
-        Ok(
-            max_batch_size
-                * cfg.num_attention_heads
-                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
-        )
-    }
-    fn non_mapped_max_act_size_elems(
-        &self,
-        _config: &str,
-        _params: &AutoDeviceMapParams,
-    ) -> Result<usize> {
-        Ok(0)
-    }
-
-    fn non_mapped_size_in_bytes(
-        &self,
-        config: &str,
-        dtype: DType,
-        weight_pack_factor: usize,
-        _matformer_config: Option<&MatformerSliceConfig>,
-    ) -> Result<usize> {
-        let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
-
-        let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
-            } else {
-                0
-            };
-            let norm = cfg.hidden_size;
-            embed_tokens + lm_head + norm
-        };
-        Ok(elems * dtype.size_in_bytes())
-    }
-
-    fn layer_sizes_in_bytes(
-        &self,
-        config: &str,
-        dtype: DType,
-        weight_pack_factor: usize,
-        _matformer_config: Option<&MatformerSliceConfig>,
-    ) -> Result<Vec<usize>> {
-        let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
-
-        let per_layer_elems = {
-            let input_layernorm = cfg.hidden_size;
-            let post_attention_layernorm = cfg.hidden_size;
-
-            let size_in = cfg.hidden_size;
-            let size_q = cfg.head_dim() * cfg.num_attention_heads;
-            let size_kv = cfg.head_dim() * cfg.num_key_value_heads;
-            let q_proj = size_in * size_q / weight_pack_factor;
-            let k_proj = size_in * size_kv / weight_pack_factor;
-            let v_proj = size_in * size_kv / weight_pack_factor;
-            let o_proj = size_q * size_in / weight_pack_factor;
-
-            // MOE layers: gate_proj, experts (w1, w2, w3), down_proj
-            let gate_proj = size_in * cfg.num_experts / weight_pack_factor;
-            let expert_elems_per_expert = (
-                size_in * cfg.moe_intermediate_size / weight_pack_factor +  // w1
-                cfg.moe_intermediate_size * size_in / weight_pack_factor +  // w2
-                cfg.moe_intermediate_size * cfg.moe_intermediate_size / weight_pack_factor  // w3
-            );
-            let experts = expert_elems_per_expert * cfg.num_experts;
-            let down_proj = cfg.moe_intermediate_size * size_in / weight_pack_factor;
-
-            input_layernorm
-                + post_attention_layernorm
-                + q_proj
-                + k_proj
-                + v_proj
-                + o_proj
-                + gate_proj
-                + experts
-                + down_proj
-        };
-        Ok(vec![
-            per_layer_elems * dtype.size_in_bytes();
-            cfg.num_hidden_layers
-        ])
-    }
-
-    fn num_layers(&self, config: &str) -> Result<usize> {
-        let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
-
-        Ok(cfg.num_hidden_layers)
-    }
-    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
-        let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
-
-        let cfg = ModelConfigMetadata {
-            max_seq_len: cfg.max_position_embeddings,
-            num_layers: cfg.num_hidden_layers,
-            hidden_size: cfg.hidden_size,
-            num_kv_heads: cfg.num_key_value_heads,
-            num_attn_heads: cfg.num_attention_heads,
-            sliding_window: cfg.sliding_window,
-            k_head_dim: cfg.head_dim(),
-            v_head_dim: cfg.head_dim(),
-        };
-
-        Ok(Box::new(cfg))
-    }
-}
+// pub struct MiMoV2FlashLoader;
+//
+// impl NormalModelLoader for MiMoV2FlashLoader {
+//     fn load(
+//         &self,
+//         config: &str,
+//         vb: ShardedVarBuilder,
+//         normal_loading_metadata: NormalLoadingMetadata,
+//         attention_mechanism: AttentionImplementation,
+//     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+//         let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
+//
+//         Ok(Box::new(models::mimov2_flash::Model::new(
+//             &cfg,
+//             vb,
+//             self.is_gptx(config)?,
+//             normal_loading_metadata,
+//             attention_mechanism,
+//         )?))
+//     }
+//     fn load_xlora(
+//         &self,
+//         config: &str,
+//         vb: ShardedVarBuilder,
+//         lora_config: &[((String, String), LoraConfig)],
+//         xlora_config: Option<XLoraConfig>,
+//         xlora_ordering: Ordering,
+//         normal_loading_metadata: NormalLoadingMetadata,
+//         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+//     ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+//         // MiMo-V2-Flash doesn't support XLora yet
+//         anyhow::bail!("XLora not supported for MiMo-V2-Flash")
+//     }
+//     fn is_gptx(&self, _: &str) -> Result<bool> {
+//         Ok(true)
+//     }
+//     fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+//         let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
+//
+//         Ok(Box::new(cfg))
+//     }
+// }
+//
+// impl IsqModelLoader for MiMoV2FlashLoader {
+//     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+//         Ok(vec![
+//             Regex::new(r"lm_head\.(weight|bias)$")?,
+//             // Attention
+//             Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+//             Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+//             Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+//             Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+//             // MOE
+//             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+//             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(w1|w2|w3)\.(weight|bias)$")?,
+//             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+//         ])
+//     }
+//     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+//         self.isq_layer_regexes(config)
+//     }
+//
+//     fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+//         Ok(vec![
+//             Regex::new(r"lm_head\.(weight|bias)$")?,
+//             // MOE layers only for MoQE
+//             Regex::new(r"layers\.(\d+)\.mlp\.gate_proj\.(weight|bias)$")?,
+//             Regex::new(r"layers\.(\d+)\.mlp\.experts\.(\d+)\.(w1|w2|w3)\.(weight|bias)$")?,
+//             Regex::new(r"layers\.(\d+)\.mlp\.down_proj\.(weight|bias)$")?,
+//         ])
+//     }
+//     fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+//         self.isq_layer_regexes_moqe(config)
+//     }
+// }
+//
+// impl DeviceMappedModelLoader for MiMoV2FlashLoader {
+//     fn mapped_max_act_size_elems(
+//         &self,
+//         config: &str,
+//         params: &AutoDeviceMapParams,
+//     ) -> Result<usize> {
+//         let AutoDeviceMapParams::Text {
+//             max_seq_len,
+//             max_batch_size,
+//         } = params
+//         else {
+//             anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+//         };
+//
+//         let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
+//
+//         Ok(
+//             max_batch_size
+//                 * cfg.num_attention_heads
+//                 * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+//         )
+//     }
+//     fn non_mapped_max_act_size_elems(
+//         &self,
+//         _config: &str,
+//         _params: &AutoDeviceMapParams,
+//     ) -> Result<usize> {
+//         Ok(0)
+//     }
+//
+//     fn non_mapped_size_in_bytes(
+//         &self,
+//         config: &str,
+//         dtype: DType,
+//         weight_pack_factor: usize,
+//         _matformer_config: Option<&MatformerSliceConfig>,
+//     ) -> Result<usize> {
+//         let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
+//
+//         let elems = {
+//             let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+//             let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
+//                 cfg.hidden_size * cfg.vocab_size / weight_pack_factor
+//             } else {
+//                 0
+//             };
+//             let norm = cfg.hidden_size;
+//             embed_tokens + lm_head + norm
+//         };
+//         Ok(elems * dtype.size_in_bytes())
+//     }
+//
+//     fn layer_sizes_in_bytes(
+//         &self,
+//         config: &str,
+//         dtype: DType,
+//         weight_pack_factor: usize,
+//         _matformer_config: Option<&MatformerSliceConfig>,
+//     ) -> Result<Vec<usize>> {
+//         let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
+//
+//         let per_layer_elems = {
+//             let input_layernorm = cfg.hidden_size;
+//             let post_attention_layernorm = cfg.hidden_size;
+//
+//             let size_in = cfg.hidden_size;
+//             let size_q = cfg.head_dim() * cfg.num_attention_heads;
+//             let size_kv = cfg.head_dim() * cfg.num_key_value_heads;
+//             let q_proj = size_in * size_q / weight_pack_factor;
+//             let k_proj = size_in * size_kv / weight_pack_factor;
+//             let v_proj = size_in * size_kv / weight_pack_factor;
+//             let o_proj = size_q * size_in / weight_pack_factor;
+//
+//             // MOE layers: gate_proj, experts (w1, w2, w3), down_proj
+//             let gate_proj = size_in * cfg.num_experts / weight_pack_factor;
+//             let expert_elems_per_expert = (
+//                 size_in * cfg.moe_intermediate_size / weight_pack_factor +  // w1
+//                 cfg.moe_intermediate_size * size_in / weight_pack_factor +  // w2
+//                 cfg.moe_intermediate_size * cfg.moe_intermediate_size / weight_pack_factor  // w3
+//             );
+//             let experts = expert_elems_per_expert * cfg.num_experts;
+//             let down_proj = cfg.moe_intermediate_size * size_in / weight_pack_factor;
+//
+//             input_layernorm
+//                 + post_attention_layernorm
+//                 + q_proj
+//                 + k_proj
+//                 + v_proj
+//                 + o_proj
+//                 + gate_proj
+//                 + experts
+//                 + down_proj
+//         };
+//         Ok(vec![
+//             per_layer_elems * dtype.size_in_bytes();
+//             cfg.num_hidden_layers
+//         ])
+//     }
+//
+//     fn num_layers(&self, config: &str) -> Result<usize> {
+//         let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
+//
+//         Ok(cfg.num_hidden_layers)
+//     }
+//     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+//         let cfg: crate::models::mimov2_flash::Config = serde_json::from_str(config)?;
+//
+//         let cfg = ModelConfigMetadata {
+//             max_seq_len: cfg.max_position_embeddings,
+//             num_layers: cfg.num_hidden_layers,
+//             hidden_size: cfg.hidden_size,
+//             num_kv_heads: cfg.num_key_value_heads,
+//             num_attn_heads: cfg.num_attention_heads,
+//             sliding_window: cfg.sliding_window,
+//             k_head_dim: cfg.head_dim(),
+//             v_head_dim: cfg.head_dim(),
+//         };
+//
+//         Ok(Box::new(cfg))
+//     }
+// }

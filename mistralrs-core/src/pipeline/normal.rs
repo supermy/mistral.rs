@@ -233,7 +233,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
             Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
             Some(NormalLoaderType::MinimaxM2) => Box::new(MinimaxM2Loader),
-            Some(NormalLoaderType::MiMoV2Flash) => Box::new(MiMoV2FlashLoader),
+            // Some(NormalLoaderType::MiMoV2Flash) => Box::new(MiMoV2FlashLoader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {
