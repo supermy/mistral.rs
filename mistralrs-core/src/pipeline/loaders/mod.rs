@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 
 pub use normal_loaders::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, Gemma2Loader, GemmaLoader,
-    GraniteMoeHybridLoader, LlamaLoader, MinimaxM2Loader, MistralLoader, MixtralLoader, NormalLoaderType,
+    GraniteMoeHybridLoader, LlamaLoader, MinimaxM2Loader, MistralLoader, MixtralLoader, MiMoV2FlashLoader, NormalLoaderType,
     NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader,
     Qwen2Loader, Qwen3Loader, Qwen3MoELoader, SmolLm3Loader, Starcoder2Loader,
 };

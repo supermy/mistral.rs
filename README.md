@@ -37,6 +37,7 @@ Please submit requests for new models [here](https://github.com/EricLBuehler/mis
 - DeepSeek V2
 - Qwen 3 MoE
 - Phi 3.5 MoE
+- MiMo-V2-Flash
 - Qwen 3
 - GLM 4
 - Gemma 2
@@ -686,6 +687,7 @@ If you do not specify the architecture, an attempt will be made to use the model
 - `smollm3`
 - `granitemoehybrid`
 - `minimax_m2`
+- `mimov2_flash`
 
 </details>
 
@@ -789,6 +791,7 @@ Please submit more benchmarks via raising an issue!
 |Gemma 3n| | |✅|
 |Qwen 3 VL | |✅|
 |Granite 4.0| | |✅|
+|MiMo-V2-Flash| | |✅|
 </details>
 
 <details>

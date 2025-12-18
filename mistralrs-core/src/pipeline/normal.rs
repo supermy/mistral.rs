@@ -12,7 +12,7 @@ use super::{
 use super::{
     AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, Gemma2Loader, GemmaLoader,
     GraniteMoeHybridLoader, LlamaLoader, MinimaxM2Loader, MistralLoader, MixtralLoader,
-    NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
+    MiMoV2FlashLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
     Qwen3MoELoader, SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
@@ -233,6 +233,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
             Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
             Some(NormalLoaderType::MinimaxM2) => Box::new(MinimaxM2Loader),
+            Some(NormalLoaderType::MiMoV2Flash) => Box::new(MiMoV2FlashLoader),
             None => Box::new(AutoNormalLoader),
         };
         Ok(Box::new(NormalLoader {
